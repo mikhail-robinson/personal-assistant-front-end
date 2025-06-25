@@ -1,9 +1,9 @@
-"use client"
+'use client'
 
-import { useState, useCallback } from "react"
+import { useState, useCallback } from 'react'
 
 interface Message {
-  role: "user" | "assistant"
+  role: 'user' | 'assistant'
   content: string
   toolCalls?: Array<{
     id: string
@@ -18,7 +18,12 @@ interface Message {
 }
 
 interface StreamEvent {
-  type: "content" | "ai_tool_request" | "tool_response" | "final_ai_response" | "stream_end"
+  type:
+    | 'content'
+    | 'ai_tool_request'
+    | 'tool_response'
+    | 'final_ai_response'
+    | 'stream_end'
   data?: string
   message_id?: string
   tool_calls?: Array<{
@@ -33,27 +38,27 @@ interface StreamEvent {
 
 export function useLangchainChat() {
   const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState("")
+  const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
-  const [streamingContent, setStreamingContent] = useState("")
+  const [streamingContent, setStreamingContent] = useState('')
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim()) return
 
     // Add user message immediately
-    const userMessage: Message = { role: "user", content: text }
+    const userMessage: Message = { role: 'user', content: text }
     setMessages((prev) => [...prev, userMessage])
 
     setIsLoading(true)
     setIsStreaming(false)
-    setStreamingContent("")
+    setStreamingContent('')
 
     try {
-      const response = await fetch("http://localhost:8000/chat/invoke", {
-        method: "POST",
+      const response = await fetch('http://localhost:8000/chat/invoke', {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({ text }),
       })
@@ -63,7 +68,7 @@ export function useLangchainChat() {
       }
 
       if (!response.body) {
-        throw new Error("No response body")
+        throw new Error('No response body')
       }
 
       setIsLoading(false)
@@ -71,11 +76,11 @@ export function useLangchainChat() {
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      let buffer = ""
+      let buffer = ''
 
       const currentAssistantMessage: Message = {
-        role: "assistant",
-        content: "",
+        role: 'assistant',
+        content: '',
         toolCalls: [],
         toolResponses: [],
       }
@@ -89,53 +94,92 @@ export function useLangchainChat() {
           buffer += decoder.decode(value, { stream: true })
 
           // Process complete SSE messages
-          const lines = buffer.split("\n\n")
-          buffer = lines.pop() || "" // Keep incomplete message in buffer
+          const lines = buffer.split('\n\n')
+          buffer = lines.pop() || '' // Keep incomplete message in buffer
 
           for (const line of lines) {
-            if (line.startsWith("data: ")) {
+            if (line.startsWith('data: ')) {
               try {
                 const eventData: StreamEvent = JSON.parse(line.slice(6))
 
                 switch (eventData.type) {
-                  case "content":
+                  case 'content':
                     if (eventData.data) {
                       currentAssistantMessage.content += eventData.data
                       setStreamingContent(currentAssistantMessage.content)
                     }
                     break
 
-                  case "ai_tool_request":
+                  case 'ai_tool_request':
                     if (eventData.tool_calls) {
                       currentAssistantMessage.toolCalls = eventData.tool_calls
                       // Update messages to show tool usage
-                      setMessages((prev) => [...prev, { ...currentAssistantMessage }])
+                      setMessages((prev) => {
+                        const newMessages = [...prev];
+                        const lastMessageIndex = newMessages.length - 1;
+
+                        if (lastMessageIndex >= 0 && newMessages[lastMessageIndex].role === 'assistant') {
+                          // Update the last assistant message
+                          newMessages[lastMessageIndex] = {
+                            ...newMessages[lastMessageIndex],
+                            content: "", // Clear content as it's handled by streamingContent
+                            toolCalls: currentAssistantMessage.toolCalls, // Set/update toolCalls
+                          };
+                        } else {
+                          // Add a new assistant message placeholder for tool calls
+                          newMessages.push({
+                            role: 'assistant',
+                            content: "", // Handled by streamingContent
+                            toolCalls: currentAssistantMessage.toolCalls,
+                            toolResponses: [],
+                          });
+                        }
+                        return newMessages;
+                      });
                     }
                     break
 
-                  case "tool_response":
-                    if (eventData.tool_call_id && eventData.tool_name && eventData.content) {
+                  case 'tool_response':
+                    if (
+                      eventData.tool_call_id &&
+                      eventData.tool_name &&
+                      eventData.content
+                    ) {
                       if (!currentAssistantMessage.toolResponses) {
                         currentAssistantMessage.toolResponses = []
                       }
                       currentAssistantMessage.toolResponses.push({
                         toolCallId: eventData.tool_call_id,
                         toolName: eventData.tool_name,
-                        content: eventData.content,
+                        content: eventData.content, // This is the tool's output
+                      })
+
+                      // Update the UI to reflect the tool response
+                      setMessages((prev) => {
+                        const newMessages = [...prev]
+                        const lastMessageIndex = newMessages.length - 1
+                        if (lastMessageIndex >= 0 && newMessages[lastMessageIndex].role === "assistant") {
+                          newMessages[lastMessageIndex] = {
+                            ...newMessages[lastMessageIndex], // Preserve content (should be ""), toolCalls
+                            toolResponses: [...(currentAssistantMessage.toolResponses || [])],
+                          }
+                        }
+                        return newMessages
                       })
                     }
                     break
 
-                  case "final_ai_response":
+                  case 'final_ai_response':
                     if (eventData.content) {
                       currentAssistantMessage.content = eventData.content
-                      setStreamingContent("")
+                      setStreamingContent('')
                       setMessages((prev) => {
                         // Replace the last assistant message or add new one
                         const newMessages = [...prev]
                         const lastMessage = newMessages[newMessages.length - 1]
-                        if (lastMessage && lastMessage.role === "assistant") {
-                          newMessages[newMessages.length - 1] = currentAssistantMessage
+                        if (lastMessage && lastMessage.role === 'assistant') {
+                          newMessages[newMessages.length - 1] =
+                            currentAssistantMessage
                         } else {
                           newMessages.push(currentAssistantMessage)
                         }
@@ -144,13 +188,13 @@ export function useLangchainChat() {
                     }
                     break
 
-                  case "stream_end":
+                  case 'stream_end':
                     setIsStreaming(false)
-                    setStreamingContent("")
+                    setStreamingContent('')
                     break
                 }
               } catch (parseError) {
-                console.error("Error parsing SSE data:", parseError)
+                console.error('Error parsing SSE data:', parseError)
               }
             }
           }
@@ -159,36 +203,37 @@ export function useLangchainChat() {
         reader.releaseLock()
       }
     } catch (error) {
-      console.error("Error sending message:", error)
+      console.error('Error sending message:', error)
       setMessages((prev) => [
         ...prev,
         {
-          role: "assistant",
-          content: "Sorry, I encountered an error while processing your request. Please try again.",
+          role: 'assistant',
+          content:
+            'Sorry, I encountered an error while processing your request. Please try again.',
         },
       ])
     } finally {
       setIsLoading(false)
       setIsStreaming(false)
-      setStreamingContent("")
+      setStreamingContent('')
     }
   }, [])
 
   const resetChat = useCallback(async () => {
     try {
-      const response = await fetch("http://localhost:8000/chat/reset", {
-        method: "POST",
+      const response = await fetch('http://localhost:8000/chat/reset', {
+        method: 'POST',
       })
 
       if (response.ok) {
         setMessages([])
-        setInput("")
-        setStreamingContent("")
+        setInput('')
+        setStreamingContent('')
       } else {
-        console.error("Failed to reset chat")
+        console.error('Failed to reset chat')
       }
     } catch (error) {
-      console.error("Error resetting chat:", error)
+      console.error('Error resetting chat:', error)
     }
   }, [])
 
