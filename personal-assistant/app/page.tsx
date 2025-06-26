@@ -17,6 +17,7 @@ export default function PersonalAssistant() {
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [audioLevel, setAudioLevel] = useState(0)
   const [isAudioEnabled, setIsAudioEnabled] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   const audioManagerRef = useRef<AudioManager | null>(null)
 
@@ -27,11 +28,15 @@ export default function PersonalAssistant() {
     // Initialize audio manager
     audioManagerRef.current = new AudioManager({
       onAudioLevel: setAudioLevel,
-      onSpeechStart: () => setIsListening(true),
+      onSpeechStart: () => {
+        setIsListening(true)
+        setError(null)
+      },
       onSpeechEnd: () => setIsListening(false),
       onSpeechResult: handleVoiceInput,
       onSpeakStart: () => setIsSpeaking(true),
       onSpeakEnd: () => setIsSpeaking(false),
+      onError: (err) => setError(err),
     })
 
     return () => {
@@ -161,8 +166,11 @@ export default function PersonalAssistant() {
                     ? "Speaking..."
                     : isLoading || isStreaming
                       ? "Thinking..."
-                      : "Tap to speak"}
+                      : error
+                        ? "Error, tap to retry"
+                        : "Tap to speak"}
               </p>
+              {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
             </div>
 
             {/* Recent Messages (Voice Mode) */}

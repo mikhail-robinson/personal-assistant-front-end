@@ -5,144 +5,149 @@ interface AudioManagerOptions {
   onSpeechResult: (transcript: string) => void
   onSpeakStart: () => void
   onSpeakEnd: () => void
+  onError?: (error: string) => void
 }
 
 export class AudioManager {
-  private recognition: any | null = null
-  private synthesis: SpeechSynthesis
+  private options: AudioManagerOptions
+  private mediaRecorder: MediaRecorder | null = null
+  private audioChunks: Blob[] = []
+  private stream: MediaStream | null = null
+
+  // For audio visualization
   private audioContext: AudioContext | null = null
   private analyser: AnalyserNode | null = null
   private microphone: MediaStreamAudioSourceNode | null = null
   private dataArray: Uint8Array | null = null
   private animationFrame: number | null = null
-  private options: AudioManagerOptions
+
+  // For TTS
+  private synthesis: SpeechSynthesis
 
   constructor(options: AudioManagerOptions) {
     this.options = options
     this.synthesis = window.speechSynthesis
-    this.initializeSpeechRecognition()
   }
 
-  private initializeSpeechRecognition() {
-    if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      this.recognition = new SpeechRecognition()
+  private async initializeMedia(): Promise<boolean> {
+    if (this.stream) return true
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: true })
 
-      this.recognition.continuous = false
-      this.recognition.interimResults = false
-      this.recognition.lang = "en-US"
-
-      this.recognition.onstart = () => {
-        this.options.onSpeechStart()
-      }
-
-      this.recognition.onend = () => {
-        this.options.onSpeechEnd()
-      }
-
-      this.recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript
-        this.options.onSpeechResult(transcript)
-      }
-
-      this.recognition.onerror = (event) => {
-        console.error("Speech recognition error:", event.error)
-        this.options.onSpeechEnd()
-      }
+      this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
+      this.analyser = this.audioContext.createAnalyser()
+      this.analyser.fftSize = 256
+      this.microphone = this.audioContext.createMediaStreamSource(this.stream)
+      this.microphone.connect(this.analyser)
+      this.dataArray = new Uint8Array(this.analyser.frequencyBinCount)
+      this.startAudioVisualization()
+      return true
+    } catch (error) {
+      console.error("Error initializing media:", error)
+      this.options.onError?.("Error initializing microphone: " + (error as Error).message)
+      return false
     }
   }
 
   async startListening() {
-    if (!this.recognition) {
-      console.error("Speech recognition not supported")
+    const mediaInitialized = await this.initializeMedia()
+    if (!mediaInitialized || !this.stream) {
+      this.options.onSpeechEnd() // Ensure state is reset
+      return
+    }
+
+    if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
+      console.log("Already recording.")
       return
     }
 
     try {
-      // Initialize audio context for visualization
-      await this.initializeAudioContext()
-      this.recognition.start()
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+          ? "audio/mp4"
+          : "audio/webm"
+      console.log("Using MIME type:", mimeType)
+
+      this.mediaRecorder = new MediaRecorder(this.stream, { mimeType })
+      this.audioChunks = []
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          this.audioChunks.push(event.data)
+        }
+      }
+
+      this.mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(this.audioChunks, { type: mimeType })
+        this.audioChunks = []
+
+        if (audioBlob.size === 0) {
+          console.warn("Audio blob is empty, not sending.")
+          this.options.onSpeechEnd()
+          this.options.onError?.("No audio recorded.")
+          return
+        }
+
+        const formData = new FormData()
+        const fileName = "recording." + (mimeType.split("/")[1]?.split(";")[0] ?? "webm")
+        formData.append("audio", audioBlob, fileName)
+
+        try {
+          const response = await fetch("http://localhost:8001/transcribe", {
+            method: "POST",
+            body: formData,
+          })
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: "Unknown error" }))
+            throw new Error(`STT server error: ${response.status} ${errorData.detail || response.statusText}`)
+          }
+
+          const result = await response.json()
+          if (result.status === "ok" && result.response) {
+            this.options.onSpeechResult(result.response)
+          } else {
+            throw new Error(result.response || "STT request failed with no specific message.")
+          }
+        } catch (error) {
+          console.error("Error sending audio to STT backend:", error)
+          this.options.onError?.("Error transcribing audio: " + (error as Error).message)
+        } finally {
+          this.options.onSpeechEnd()
+        }
+      }
+
+      this.mediaRecorder.start()
+      this.options.onSpeechStart()
     } catch (error) {
-      console.error("Error starting speech recognition:", error)
+      console.error("Error starting MediaRecorder:", error)
+      this.options.onError?.("Error starting recording: " + (error as Error).message)
+      this.options.onSpeechEnd()
     }
   }
 
   stopListening() {
-    if (this.recognition) {
-      this.recognition.stop()
-    }
-    this.stopAudioVisualization()
-  }
-
-  speak(text: string) {
-    if (!this.synthesis) {
-      console.error("Speech synthesis not supported")
-      return
-    }
-
-    // Cancel any ongoing speech
-    this.synthesis.cancel()
-
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 0.9
-    utterance.pitch = 1
-    utterance.volume = 1
-
-    utterance.onstart = () => {
-      this.options.onSpeakStart()
-    }
-
-    utterance.onend = () => {
-      this.options.onSpeakEnd()
-    }
-
-    utterance.onerror = (event) => {
-      console.error("Speech synthesis error:", event.error)
-      this.options.onSpeakEnd()
-    }
-
-    this.synthesis.speak(utterance)
-  }
-
-  stopSpeaking() {
-    if (this.synthesis) {
-      this.synthesis.cancel()
-      this.options.onSpeakEnd()
-    }
-  }
-
-  private async initializeAudioContext() {
-    try {
-      this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
-      this.analyser = this.audioContext.createAnalyser()
-      this.analyser.fftSize = 256
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      this.microphone = this.audioContext.createMediaStreamSource(stream)
-      this.microphone.connect(this.analyser)
-
-      this.dataArray = new Uint8Array(this.analyser.frequencyBinCount)
-      this.startAudioVisualization()
-    } catch (error) {
-      console.error("Error initializing audio context:", error)
+    if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
+      this.mediaRecorder.stop()
+    } else {
+      this.options.onSpeechEnd()
     }
   }
 
   private startAudioVisualization() {
-    if (!this.analyser || !this.dataArray) return
-
-    const updateAudioLevel = () => {
-      this.analyser!.getByteFrequencyData(this.dataArray!)
-
-      // Calculate average audio level
-      const average = this.dataArray!.reduce((sum, value) => sum + value, 0) / this.dataArray!.length
-      const normalizedLevel = average / 255
-
-      this.options.onAudioLevel(normalizedLevel)
-      this.animationFrame = requestAnimationFrame(updateAudioLevel)
+    if (!this.analyser || !this.dataArray || !this.audioContext || this.audioContext.state === "closed") return
+    const update = () => {
+      if (!this.analyser || !this.dataArray || !this.audioContext || this.audioContext.state === "closed") {
+        if (this.animationFrame) cancelAnimationFrame(this.animationFrame)
+        return
+      }
+      this.analyser.getByteFrequencyData(this.dataArray)
+      const average = this.dataArray.reduce((sum, value) => sum + value, 0) / this.dataArray.length
+      this.options.onAudioLevel(average / 255)
+      this.animationFrame = requestAnimationFrame(update)
     }
-
-    updateAudioLevel()
+    update()
   }
 
   private stopAudioVisualization() {
@@ -152,22 +157,54 @@ export class AudioManager {
     }
   }
 
+  speak(text: string) {
+    if (!this.synthesis) return
+    this.synthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 0.9
+    utterance.pitch = 1
+    utterance.volume = 1
+    utterance.onstart = () => this.options.onSpeakStart()
+    utterance.onend = () => this.options.onSpeakEnd()
+    utterance.onerror = (event) => {
+      console.error("Speech synthesis error:", event.error)
+      this.options.onSpeakEnd()
+    }
+    this.synthesis.speak(utterance)
+  }
+
+  stopSpeaking() {
+    if (this.synthesis) {
+      this.synthesis.cancel()
+    }
+  }
+
   cleanup() {
     this.stopListening()
     this.stopSpeaking()
     this.stopAudioVisualization()
 
-    if (this.audioContext) {
-      this.audioContext.close()
+    if (this.stream) {
+      this.stream.getTracks().forEach((track) => track.stop())
+      this.stream = null
+    }
+    if (this.microphone) {
+      this.microphone.disconnect()
+      this.microphone = null
+    }
+    if (this.analyser) {
+      this.analyser.disconnect()
+      this.analyser = null
+    }
+    if (this.audioContext && this.audioContext.state !== "closed") {
+      this.audioContext.close().catch(console.error)
+      this.audioContext = null
     }
   }
 }
 
-// Extend Window interface for speech recognition
 declare global {
   interface Window {
-    SpeechRecognition: any
-    webkitSpeechRecognition: any
     AudioContext: typeof AudioContext
     webkitAudioContext: typeof AudioContext
   }
