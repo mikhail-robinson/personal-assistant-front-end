@@ -94,7 +94,7 @@ export class AudioManager {
         formData.append("audio", audioBlob, fileName)
 
         try {
-          const response = await fetch("http://localhost:8001/transcribe", {
+          const response = await fetch("http://localhost:8001/stt/transcribe", {
             method: "POST",
             body: formData,
           })
