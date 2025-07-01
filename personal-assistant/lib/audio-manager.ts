@@ -22,11 +22,11 @@ export class AudioManager {
   private animationFrame: number | null = null
 
   // For TTS
-  private synthesis: SpeechSynthesis
+  private audioQueue: HTMLAudioElement[] = []
+  private isPlaying = false
 
   constructor(options: AudioManagerOptions) {
     this.options = options
-    this.synthesis = window.speechSynthesis
   }
 
   private async initializeMedia(): Promise<boolean> {
@@ -94,6 +94,8 @@ export class AudioManager {
         formData.append("audio", audioBlob, fileName)
 
         try {
+          // NOTE: The STT endpoint was changed in the plan to /stt/transcribe
+          // This ensures consistency with the new TTS endpoint.
           const response = await fetch("http://localhost:8001/stt/transcribe", {
             method: "POST",
             body: formData,
@@ -130,9 +132,9 @@ export class AudioManager {
   stopListening() {
     if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
       this.mediaRecorder.stop()
-    } else {
-      this.options.onSpeechEnd()
     }
+    // Immediately update the UI state to reflect that listening has stopped.
+    this.options.onSpeechEnd()
   }
 
   private startAudioVisualization() {
@@ -157,25 +159,76 @@ export class AudioManager {
     }
   }
 
-  speak(text: string) {
-    if (!this.synthesis) return
-    this.synthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 0.9
-    utterance.pitch = 1
-    utterance.volume = 1
-    utterance.onstart = () => this.options.onSpeakStart()
-    utterance.onend = () => this.options.onSpeakEnd()
-    utterance.onerror = (event) => {
-      console.error("Speech synthesis error:", event.error)
-      this.options.onSpeakEnd()
+  async speak(text: string) {
+    if (!text.trim()) return
+
+    try {
+      const response = await fetch("http://localhost:8002/tts/synthesize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: "TTS server error" }))
+        throw new Error(errorData.detail)
+      }
+
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const audio = new Audio(audioUrl)
+      this.audioQueue.push(audio)
+      if (!this.isPlaying) {
+        this.playNextInQueue()
+      }
+    } catch (error) {
+      console.error("Error synthesizing speech:", error)
+      this.options.onError?.("Failed to generate speech.")
     }
-    this.synthesis.speak(utterance)
+  }
+
+  private playNextInQueue() {
+    if (this.audioQueue.length === 0) {
+      this.isPlaying = false
+      return
+    }
+
+    this.isPlaying = true
+    const audio = this.audioQueue[0]
+
+    const onEnded = () => {
+      URL.revokeObjectURL(audio.src) // Clean up the object URL
+      this.audioQueue.shift() // Remove the played audio from the queue
+      this.playNextInQueue()
+    }
+
+    audio.addEventListener("ended", onEnded)
+    audio.addEventListener("error", (e) => {
+      console.error("Error playing audio:", e)
+      this.options.onError?.("Failed to play audio.")
+      onEnded() // Move to the next item even if this one fails
+    })
+
+    this.options.onSpeakStart()
+    audio.play().catch((e) => {
+      console.error("Audio play failed:", e)
+      this.options.onError?.("Audio playback was prevented.")
+      onEnded() // Ensure queue continues
+    })
   }
 
   stopSpeaking() {
-    if (this.synthesis) {
-      this.synthesis.cancel()
+    if (this.audioQueue.length > 0) {
+      const currentAudio = this.audioQueue[0]
+      currentAudio.pause()
+      currentAudio.currentTime = 0
+      // Clean up the entire queue
+      this.audioQueue.forEach(audio => URL.revokeObjectURL(audio.src));
+      this.audioQueue = []
+      this.isPlaying = false
+      this.options.onSpeakEnd()
     }
   }
 

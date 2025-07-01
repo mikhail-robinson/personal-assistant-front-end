@@ -44,15 +44,18 @@ export default function PersonalAssistant() {
     }
   }, [])
 
+  // Effect to automatically play TTS for new assistant messages in voice mode
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1]
+    if (lastMessage && lastMessage.role === "assistant" && isVoiceMode && isAudioEnabled) {
+      handleTextToSpeech(lastMessage.content)
+    }
+  }, [messages])
+
   const handleVoiceInput = async (transcript: string) => {
     if (!transcript.trim()) return
 
     await sendMessage(transcript)
-
-    // Convert AI response to speech when in voice mode (will be implemented later)
-    // if (isVoiceMode && isAudioEnabled && response) {
-    //   handleTextToSpeech(response)
-    // }
   }
 
   const handleTextToSpeech = (text: string) => {
@@ -215,3 +218,4 @@ export default function PersonalAssistant() {
     </div>
   )
 }
+
