@@ -192,6 +192,7 @@ export class AudioManager {
   private playNextInQueue() {
     if (this.audioQueue.length === 0) {
       this.isPlaying = false
+      this.options.onSpeakEnd() // Ensure state is reset when the queue is empty
       return
     }
 
