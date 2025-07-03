@@ -11,7 +11,7 @@ interface VoiceVisualizerProps {
 
 export function VoiceVisualizer({ isListening, isSpeaking, audioLevel, isLoading }: VoiceVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const animationRef = useRef<number>()
+  const animationRef = useRef<number | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
