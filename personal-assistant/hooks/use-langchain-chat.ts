@@ -8,7 +8,7 @@ interface Message {
   toolCalls?: Array<{
     id: string
     name: string
-    args: any
+    args: Record<string, unknown>
   }>
   toolResponses?: Array<{
     toolCallId: string
@@ -29,7 +29,7 @@ interface StreamEvent {
   tool_calls?: Array<{
     id: string
     name: string
-    args: any
+    args: Record<string, unknown>
   }>
   tool_call_id?: string
   tool_name?: string

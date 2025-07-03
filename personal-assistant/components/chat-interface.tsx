@@ -13,7 +13,7 @@ interface Message {
   toolCalls?: Array<{
     id: string
     name: string
-    args: any
+    args: Record<string, unknown>
   }>
   toolResponses?: Array<{
     toolCallId: string
